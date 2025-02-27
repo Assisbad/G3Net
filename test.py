@@ -39,28 +39,27 @@ def save_numpy_as_image(array, save_path, normalize=False,
     Save a NumPy array as an image file with optional windowing (for single-channel images).
     The output image is always 8-bit.
     """
-    # 检查通道数
+
     if array.ndim == 3:
         if array.shape[-1] == 1:
             array = array.squeeze(-1)
-            mode = 'L'  # 单通道用 8-bit 灰度模式
+            mode = 'L'  
         elif array.shape[-1] == 3:
             mode = 'RGB'
         else:
             raise ValueError(f"Unsupported channels: {array.shape[-1]}")
     elif array.ndim == 2:
-        mode = 'L'  # 灰度图
+        mode = 'L' 
     else:
         raise ValueError(f"Unsupported shape: {array.shape}")
 
-    # 应用窗口化（如果提供且为单通道）
+
     if (window_level is not None) and (window_width is not None) and (array.ndim == 2):
         lower = window_level - window_width / 2
         upper = window_level + window_width / 2
         array = np.clip(array, lower, upper)
-        array = (array - lower) / window_width  # 归一化到 [0,1]
+        array = (array - lower) / window_width  
 
-    # 归一化到 [0,1] 并转为 8-bit
     if normalize or (array.dtype in [np.float32, np.float64]):
         min_val = np.min(array)
         max_val = np.max(array)
@@ -70,10 +69,9 @@ def save_numpy_as_image(array, save_path, normalize=False,
             array = np.zeros_like(array)
     array = (array * 255).clip(0, 255).astype(np.uint8)
 
-    # 转换为 PIL 图像并保存
     image = Image.fromarray(array, mode=mode)
     image.save(save_path)
-    print(f"生成图像已保存到: {save_path}")
+    print(f"the generated image has saved to: {save_path}")
 
 def ensure_rgb(array):
     """
