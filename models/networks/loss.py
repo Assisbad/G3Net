@@ -105,7 +105,7 @@ class VGGLoss(nn.Module):
         self.vgg = VGG19().cuda()
         self.criterion = nn.L1Loss()
         self.weights = [1.0 / 32, 1.0 / 16, 1.0 / 8, 1.0 / 4, 1.0]
-        # 定义用于归一化的均值和标准差
+
         self.mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).cuda()
         self.std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).cuda()
 
@@ -113,32 +113,27 @@ class VGGLoss(nn.Module):
         loss = 0
         num_channels = x.shape[1]
         for c in range(num_channels):
-            x_c = x[:, c:c + 1, :, :]  # 取第 c 个通道
+            x_c = x[:, c:c + 1, :, :]  
             y_c = y[:, c:c + 1, :, :]
-            # 将单通道复制为3通道
+
             x_c = x_c.repeat(1, 3, 1, 1)
             y_c = y_c.repeat(1, 3, 1, 1)
-            # 将图像从 [-1, 1] 归一化到 [0, 1]
+
             x_c = (x_c + 1) / 2
             y_c = (y_c + 1) / 2
 
-            # 使用 ImageNet 的均值和标准差进行归一化
             x_c = (x_c - self.mean) / self.std
             y_c = (y_c - self.mean) / self.std
 
-            # 通过 VGG 网络提取特征
             x_vgg, y_vgg = self.vgg(x_c), self.vgg(y_c)
 
-            # 计算多层特征的损失
             for i in range(len(x_vgg)):
                 loss += self.weights[i] * self.criterion(x_vgg[i], y_vgg[i].detach())
 
-        # 平均每个通道的损失
         loss /= num_channels
         return loss
 
 
-# KL Divergence loss used in VAE with an image encoder
 class KLDLoss(nn.Module):
     def forward(self, mu, logvar):
         return -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
@@ -149,26 +144,17 @@ class SpaceLoss(nn.Module):
         super(SpaceLoss, self).__init__()
 
     def forward(self, adj_attention_map, adj_matrix):
-        """
-        计算生成的 adj_attention_map 和给定的 adj_matrix 之间的空间损失。
-        使用 L2 损失度量两者之间的差异。
-        """
-        # adj_attention_map 的形状是 [16, 1, 7, 7]
-        # adj_matrix 的形状是 [1, 16, 16]
 
-        batch_size = adj_matrix.size(0)  # bs = 1
-        numnodes = adj_matrix.size(1)  # numnodes = 16
+        batch_size = adj_matrix.size(0)  
+        numnodes = adj_matrix.size(1) 
 
-        # 扩展 adj_matrix 使其具有与 adj_attention_map 相同的空间维度
-        adj_matrix_expanded = adj_matrix.unsqueeze(1)  # [1, 16, 16] -> [1, 1, 16, 16]
+        adj_matrix_expanded = adj_matrix.unsqueeze(1) 
 
-        # 将 adj_matrix 的每个节点的关系映射到 (16, 1, 7, 7) 的空间维度上
         adj_matrix_expanded = F.interpolate(
             adj_matrix_expanded, size=(adj_attention_map.size(2), adj_attention_map.size(3)),
             mode='bilinear', align_corners=False
         )  # [1, 1, 7, 7]
 
-        # 计算 L2 损失（均方误差）
         loss = F.mse_loss(adj_attention_map, adj_matrix_expanded)
         return loss
 
@@ -177,7 +163,7 @@ class InceptionFeatureExtractor(nn.Module):
     def __init__(self, device='cuda'):
         super(InceptionFeatureExtractor, self).__init__()
         inception = inception_v3(pretrained=True, transform_input=False)
-        # 去除 AuxLogits 和 fc 层
+
         inception.AuxLogits = None
         inception.fc = nn.Identity()
         self.features = inception
@@ -190,60 +176,40 @@ class InceptionFeatureExtractor(nn.Module):
     def forward(self, x):
         if x.size(2) != 299 or x.size(3) != 299:
             x = F.interpolate(x, size=(299, 299), mode='bilinear', align_corners=False)
-        # 直接调用 Inception 的 forward 方法
         features = self.features(x)
-        # 如果 forward 返回的是元组，则只取第一个（主输出）
         if isinstance(features, tuple):
             features = features[0]
-        # 假设此时 features shape 为 (B, 2048, 1, 1)
         features = features.view(features.size(0), -1)
         return features
 
 
 class StatisticalMatchingLoss(nn.Module):
     def __init__(self, device='cuda', lambda_cov=10.0):
-        """
-        lambda_cov: 协方差损失的权重
-        """
         super(StatisticalMatchingLoss, self).__init__()
         self.feature_extractor = InceptionFeatureExtractor(device=device)
         self.lambda_cov = lambda_cov
         self.device = device
 
     def compute_mean_cov(self, features):
-        """
-        计算特征的均值和协方差。features: (B, feature_dim)
-        """
-        # 计算均值
+
         mu = torch.mean(features, dim=0)  # shape: (feature_dim,)
-        # 中心化数据
         centered = features - mu.unsqueeze(0)
-        # 无偏协方差估计，注意：如果 batch size 很小，这里的估计可能会有噪声
         cov = torch.matmul(centered.t(), centered) / (features.size(0) - 1)
         return mu, cov
 
     def forward(self, fake_images, real_images):
-        # 如果输入为单通道，重复 3 个通道
         if fake_images.size(1) == 1:
             fake_images = fake_images.repeat(1, 3, 1, 1)
         if real_images.size(1) == 1:
             real_images = real_images.repeat(1, 3, 1, 1)
 
-        """
-        fake_images, real_images: 形状 (B, C, H, W)
-        要求图像为浮点型且范围在 [0, 1]（如有需要，可先做归一化）
-        """
-        # 提取特征
         fake_features = self.feature_extractor(fake_images)
         real_features = self.feature_extractor(real_images)
 
-        # 分别计算均值与协方差
         mu_fake, cov_fake = self.compute_mean_cov(fake_features)
         mu_real, cov_real = self.compute_mean_cov(real_features)
 
-        # 均值差：简单使用 L2 距离（均方误差）
         loss_mu = torch.mean((mu_fake - mu_real) ** 2)
-        # 协方差差：采用 Frobenius 范数的平方
         loss_cov = torch.mean((cov_fake - cov_real) ** 2)
 
         loss = loss_mu + self.lambda_cov * loss_cov
@@ -385,13 +351,13 @@ class LearnableTextureExtractor(nn.Module):
     def __init__(self, num_classes):
         super(LearnableTextureExtractor, self).__init__()
         self.fc1 = nn.Linear(4, 16)
-        self.bn1 = nn.BatchNorm1d(16)  # 修改为固定的特征维度
+        self.bn1 = nn.BatchNorm1d(16)  
         self.dropout1 = nn.Dropout(0.25)
         self.fc2 = nn.Linear(16, 32)
-        self.bn2 = nn.BatchNorm1d(32)  # 修改为固定的特征维度
+        self.bn2 = nn.BatchNorm1d(32)  
         self.dropout2 = nn.Dropout(0.25)
         self.fc3 = nn.Linear(32, 64)
-        self.bn3 = nn.BatchNorm1d(64)  # 修改为固定的特征维度
+        self.bn3 = nn.BatchNorm1d(64)  
         self.dropout3 = nn.Dropout(0.25)
         self.fc4 = nn.Linear(64, 1)
 
